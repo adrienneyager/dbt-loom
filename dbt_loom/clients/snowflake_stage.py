@@ -11,6 +11,16 @@ from dbt_loom.logging import fire_event
 from pydantic import BaseModel
 
 
+def _load_downloaded_manifest(download_path: Path) -> Dict:
+    """Read a plain or gzip-compressed manifest downloaded from a stage."""
+    content = download_path.read_bytes()
+
+    if is_gzipped(content):
+        content = gzip.decompress(content)
+
+    return json.loads(content)
+
+
 class SnowflakeReferenceConfig(BaseModel):
     """Configuration for an reference stored in Snowflake Stage"""
 
@@ -72,11 +82,4 @@ class SnowflakeClient:
 
         download_path = Path(tmp_dir) / file_name
 
-        with download_path.open("r") as f:
-            content = f.read()
-
-        if is_gzipped(content.encode()):
-            with gzip.GzipFile(content) as gzip_file:
-                content = gzip_file.read().decode("utf-8")
-
-        return json.loads(content)
+        return _load_downloaded_manifest(download_path)
