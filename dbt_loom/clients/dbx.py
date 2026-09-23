@@ -1,7 +1,7 @@
 import json
 import gzip
 from io import BytesIO
-from typing import Dict
+from typing import Dict, Optional
 from dbt_loom.clients import is_gzipped
 from dbt_loom.logging import fire_event
 from pydantic import BaseModel
@@ -36,6 +36,30 @@ class DatabricksClient:
         else:
             # If the path type is not supported, raise a TypeError.
             raise TypeError(f"Unsupported path type: {type(self.path)}")
+
+    def get_cache_token(self) -> Optional[str]:
+        """
+        Build a cache-validation token from the file's Databricks metadata
+        (modification time and size), or None if it cannot be retrieved.
+        """
+
+        try:
+            from databricks.sdk import WorkspaceClient
+
+            w = WorkspaceClient()
+            path_str = self._get_path_str()
+
+            if path_str.startswith("/Workspace/"):
+                object_info = w.workspace.get_status(path_str)
+                return f"{object_info.modified_at}-{object_info.size}"
+
+            if path_str.startswith("/dbfs/"):
+                file_info = w.dbfs.get_status(path_str[5:])
+                return f"{file_info.modification_time}-{file_info.file_size}"
+
+            return w.files.get_metadata(path_str).last_modified
+        except Exception:
+            return None
 
     def load_manifest(self) -> Dict:
         """Load the manifest.json file from Databricks."""

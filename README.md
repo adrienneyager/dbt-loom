@@ -291,6 +291,27 @@ manifests:
     optional: true # If the manifest file is missing, do not raise an error
 ```
 
+### Manifest caching
+
+Manifests are cached in `target/.dbt_loom/<config_hash>/`. Before downloading, dbt-loom fetches file metadata from the remote source and reuses the cached manifest when that metadata is unchanged. Currently supported for `databricks` manifests only, and can be disabled per manifest with `cache: false`.
+
+Set `cache_ttl` (in seconds) to skip the metadata check entirely while the cached copy is younger than the TTL, so no remote call is made at all. A TTL works for every manifest type.
+
+```yaml
+manifests:
+  - name: revenue
+    type: databricks
+    config:
+      path: /Volumes/main/default/artifacts/manifest.json
+    cache_ttl: 300 # Reuse the cached manifest for five minutes, no API calls
+
+  - name: customers
+    type: databricks
+    config:
+      path: /Volumes/main/default/artifacts/customers.json
+    cache: false # Always download the manifest
+```
+
 ## Known Caveats
 
 Cross-project dependencies are a relatively new development, and dbt-core plugins

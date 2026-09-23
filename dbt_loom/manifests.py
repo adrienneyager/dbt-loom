@@ -25,6 +25,8 @@ from dbt_loom.clients.paradime import ParadimeClient, ParadimeReferenceConfig
 from dbt_loom.clients.gcs import GCSClient, GCSReferenceConfig
 from dbt_loom.clients.s3 import S3Client, S3ReferenceConfig
 from dbt_loom.clients.dbx import DatabricksClient, DatabricksReferenceConfig
+from dbt_loom.cache import ManifestCache
+from dbt_loom.logging import fire_event
 from dbt_loom.config import (
     FileReferenceConfig,
     LoomConfigurationError,
@@ -122,6 +124,49 @@ class ManifestLoader:
             ManifestReferenceType.paradime: self.load_from_paradime,
             ManifestReferenceType.databricks: self.load_from_databricks,
         }
+
+        # Sources able to check whether the remote manifest has changed.
+        # To support caching, give the source client a `get_cache_token()` method.
+        # Return a token that changes when the remote manifest changes, and register here.
+        self.cache_token_functions = {
+            ManifestReferenceType.databricks: self.cache_token_from_databricks,
+        }
+
+    @staticmethod
+    def cache_token_from_databricks(config: DatabricksReferenceConfig) -> Optional[str]:
+        """Fetch a cache-validation token for a Databricks-hosted manifest."""
+
+        return DatabricksClient(path=config.path).get_cache_token()
+
+    def get_cache(
+        self, manifest_reference: ManifestReference
+    ) -> Optional[ManifestCache]:
+        """
+        Return the local cache for a manifest reference, or None if caching is
+        disabled or unsupported for this reference. A TTL alone is enough to
+        cache any source; without one, the source must be able to provide a
+        cache-validation token.
+        """
+
+        if not manifest_reference.cache or (
+            manifest_reference.cache_ttl <= 0
+            and manifest_reference.type not in self.cache_token_functions
+        ):
+            return None
+
+        return ManifestCache(manifest_reference.config)
+
+    def get_cache_token(self, manifest_reference: ManifestReference) -> Optional[str]:
+        """
+        Fetch the cache-validation token for a manifest reference, or None if
+        the source cannot provide one.
+        """
+
+        cache_token_function = self.cache_token_functions.get(manifest_reference.type)
+        if cache_token_function is None:
+            return None
+
+        return cache_token_function(manifest_reference.config)
 
     @staticmethod
     def load_from_path(config: FileReferenceConfig) -> Dict:
@@ -266,6 +311,39 @@ class ManifestLoader:
                 "not have a valid type."
             )
 
+        cache = self.get_cache(manifest_reference)
+        cache_token = None
+
+        if cache:
+            # Within the TTL, serve the cache without contacting the source.
+            cached_manifest = cache.read_if_fresh(manifest_reference.cache_ttl)
+
+            cache_token = (
+                self.get_cache_token(manifest_reference)
+                if cached_manifest is None
+                else None
+            )
+            if cache_token:
+                cached_manifest = cache.read(cache_token)
+
+            if cached_manifest is not None:
+                if cache_token:
+                    # The source confirmed the manifest is unchanged, so the TTL
+                    # window can start again from now.
+                    cache.touch(cache_token)
+
+                fire_event(
+                    msg="dbt-loom: Using the cached manifest for"
+                    f" `{manifest_reference.name}`."
+                )
+                return cached_manifest
+
+        if manifest_reference.cache:
+            fire_event(
+                msg=f"dbt-loom: Cache skipped for `{manifest_reference.name}`."
+                " Downloading the manifest."
+            )
+
         try:
             manifest = self.loading_functions[manifest_reference.type](
                 manifest_reference.config
@@ -274,5 +352,8 @@ class ManifestLoader:
             if getattr(manifest_reference, "optional", False):
                 return None
             raise e
+
+        if cache and manifest is not None:
+            cache.write(manifest, cache_token or "")
 
         return manifest

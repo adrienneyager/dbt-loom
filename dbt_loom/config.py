@@ -79,6 +79,8 @@ class ManifestReference(BaseModel):
     excluded_packages: List[str] = Field(default_factory=list)
     included_packages: List[str] = Field(default_factory=list)
     optional: bool = False
+    cache: bool = True
+    cache_ttl: int = 0
 
     @field_validator("config", mode="before")
     @classmethod
