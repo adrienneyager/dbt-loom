@@ -105,6 +105,7 @@ def merge_loom_nodes(
     existing_nodes: Dict[str, LoomModelNodeArgs],
     new_nodes: Dict[str, LoomModelNodeArgs],
     manifest_name: str,
+    root_project_name: Optional[str] = None,
 ) -> None:
     """Merge ``new_nodes`` from a manifest into ``existing_nodes`` in place.
 
@@ -112,8 +113,17 @@ def merge_loom_nodes(
     always be used. Transitive dependency nodes (from other packages) should
     only be added if not already provided by a previous, more authoritative
     manifest.
+
+    Nodes whose ``package_name`` matches ``root_project_name`` (the project
+    currently being compiled) are always skipped. Such nodes are stale
+    transitive copies that arrive via circular loom dependencies (e.g.
+    A -> B -> A); the local project is always authoritative for its own nodes,
+    and re-injecting an upstream snapshot can introduce references to disabled
+    or deleted models that are no longer in the local graph.
     """
     for key, value in new_nodes.items():
+        if root_project_name and value.package_name == root_project_name:
+            continue
         is_authoritative = value.package_name == manifest_name
         if is_authoritative or key not in existing_nodes:
             existing_nodes[key] = value
@@ -326,7 +336,10 @@ class dbtLoom(dbtPlugin):
 
             loom_nodes = convert_model_nodes_to_model_node_args(filtered_nodes)
 
-            merge_loom_nodes(self.models, loom_nodes, manifest_name)
+            merge_loom_nodes(
+                self.models, loom_nodes, manifest_name,
+                root_project_name=self.project_name,
+            )
 
     @dbt_hook
     def get_nodes(self) -> PluginNodes:
