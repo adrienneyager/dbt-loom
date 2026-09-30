@@ -27,6 +27,25 @@ from dbt_loom.manifests import ManifestLoader, ManifestNode
 import importlib.metadata
 
 
+def _build_column_info(columns_data: dict) -> dict:
+    """Build ColumnInfo objects from raw manifest column data, with dbt version compatibility."""
+    try:
+        from dbt.artifacts.resources.v1.components import ColumnInfo
+    except ImportError:
+        try:
+            from dbt.contracts.graph.nodes import ColumnInfo  # type: ignore
+        except ImportError:
+            return {}
+
+    result = {}
+    for col_name, col_data in columns_data.items():
+        try:
+            result[col_name] = ColumnInfo.from_dict(col_data)
+        except Exception:
+            pass
+    return result
+
+
 @dataclass
 class LoomModelNodeArgs(ModelNodeArgs):
     """A dbt-loom extension of ModelNodeArgs to preserve resource types across lineages."""
@@ -34,18 +53,22 @@ class LoomModelNodeArgs(ModelNodeArgs):
     resource_type: NodeType = NodeType.Model
     group: Optional[str] = None
     event_time: Optional[str] = None
+    contract_info: dict = None
+    columns_info: dict = None
 
     def __init__(self, **kwargs):
         super().__init__(
             **{
                 key: value
                 for key, value in kwargs.items()
-                if key not in ("resource_type", "group", "config")
+                if key not in ("resource_type", "group", "config", "contract", "columns")
             }
         )
         self.resource_type = kwargs.get("resource_type", NodeType.Model)
         self.group = kwargs.get("group")
         self.event_time = kwargs.get("config", {}).get("event_time", None)
+        self.contract_info = kwargs.get("contract", {}) or {}
+        self.columns_info = kwargs.get("columns", {}) or {}
 
     @property
     def unique_id(self) -> str:
@@ -215,6 +238,15 @@ class dbtLoom(dbtPlugin):
             model = function(args)
             model.group = args.group
             model.config.event_time = args.event_time
+
+            if args.contract_info.get("enforced"):
+                model.contract.enforced = True
+                model.contract.alias_types = args.contract_info.get("alias_types", True)
+                model.contract.checksum = args.contract_info.get("checksum")
+                model.config.contract.enforced = True
+                if args.columns_info:
+                    model.columns = _build_column_info(args.columns_info)
+
             return model
 
         return outer_function
