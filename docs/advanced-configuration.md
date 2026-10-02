@@ -85,3 +85,69 @@ in the `dbt_loom.config.yml` file.
 enable_telemetry: true
 manifests: ...
 ```
+
+## Custom Manifest Node Transformers
+
+You can apply custom transformations to nodes after they are loaded from
+upstream manifests. Each transformer is a Python callable that receives
+the selected nodes and a context object, and returns the (potentially modified)
+nodes dictionary.
+
+### Writing a transformer
+
+Create a Python module in your project or an installable package:
+
+```python
+# my_company/dbt_transforms.py
+from dbt_loom.transformers import TransformerContext
+from dbt_loom.manifests import ManifestNode
+
+
+def rewrite_databases(
+    nodes: dict[str, ManifestNode],
+    context: TransformerContext,
+) -> dict[str, ManifestNode]:
+    """Rewrite database names using an alias mapping."""
+    alias_map = {"upstream_db": "downstream_db"}
+
+    for node in nodes.values():
+        if node.database and node.database in alias_map:
+            original_db = node.database
+            alias_db = alias_map[original_db]
+            node.database = alias_db
+            if node.relation_name:
+                node.relation_name = node.relation_name.replace(
+                    original_db, alias_db, 1
+                )
+    return nodes
+```
+
+The `TransformerContext` provides:
+
+- `manifest_name` — the resolved project name from manifest metadata
+- `manifest_reference_name` — the `name` field from your config
+- `raw_manifest` — the full manifest dictionary, for advanced use cases
+
+### Configuring transformers
+
+Add dotted Python import paths to the `node_transformers` list for a manifest
+reference. Transformers are applied in the order listed.
+
+```yaml
+manifests:
+  - name: revenue
+    type: file
+    config:
+      path: ../revenue/target/manifest.json
+    node_transformers:
+      - "my_company.dbt_transforms.rewrite_databases"
+```
+
+### Execution order
+
+For each manifest reference, the node processing pipeline is:
+
+1. Parse raw manifest into `ManifestNode` objects
+2. Apply `node_transformers` in list order
+3. Filter out `excluded_packages`
+4. Convert to dbt-injectable node args

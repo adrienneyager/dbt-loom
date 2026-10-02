@@ -20,7 +20,8 @@ except ModuleNotFoundError:
     from dbt.node_types import NodeType  # type: ignore
 
 
-from dbt_loom.config import ManifestReference, dbtLoomConfig
+from dbt_loom.config import LoomConfigurationError, ManifestReference, dbtLoomConfig
+from dbt_loom.transformers import TransformerContext, chain_transformers, resolve_transformer
 from dbt_loom.logging import fire_event
 from dbt_loom.manifests import ManifestLoader, ManifestNode
 
@@ -84,6 +85,7 @@ def identify_node_subgraph(manifest) -> Dict[str, ManifestNode]:
         output[unique_id] = ManifestNode(**(node))
 
     return output
+
 
 
 def convert_model_nodes_to_model_node_args(
@@ -316,6 +318,31 @@ class dbtLoom(dbtPlugin):
             self.manifests[manifest_name] = manifest
 
             selected_nodes = identify_node_subgraph(manifest)
+
+            # Resolve and apply user-defined node transformers.
+            transformers = []
+            for path in manifest_reference.node_transformers:
+                fire_event(
+                    msg=f"dbt-loom: Loading node transformer `{path}` "
+                    f"for `{manifest_reference.name}`"
+                )
+                try:
+                    transformers.append(resolve_transformer(path))
+                except (ImportError, AttributeError, TypeError) as e:
+                    raise LoomConfigurationError(
+                        f"Failed to load node transformer '{path}' for "
+                        f"manifest '{manifest_reference.name}': {e}"
+                    ) from e
+
+            if transformers:
+                context = TransformerContext(
+                    manifest_name=manifest_name,
+                    manifest_reference_name=manifest_reference.name,
+                    raw_manifest=manifest,
+                )
+                selected_nodes = chain_transformers(transformers)(
+                    selected_nodes, context
+                )
 
             # Remove nodes from excluded packages.
             filtered_nodes = {
