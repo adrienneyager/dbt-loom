@@ -159,8 +159,8 @@ class ManifestLoader:
         if not file_path.exists():
             raise LoomConfigurationError(f"The path `{file_path}` does not exist.")
 
-        file = open(file_path)
-        content = file.read()
+        with open(file_path, encoding="utf-8") as file:
+            content = file.read()
         if is_gzipped(content.encode()):
             with gzip.GzipFile(content) as gz_file:
                 return json.load(gz_file)

@@ -32,12 +32,22 @@ def test_load_from_local_filesystem_pass(example_file):
     path, example_content = example_file
 
     file_config = FileReferenceConfig(
-        path=urlparse("file://" + str(Path(path).absolute()))
+        path=urlparse(Path(path).absolute().as_uri())
     )
 
     output = ManifestLoader.load_from_local_filesystem(file_config)
 
     assert output == example_content
+
+
+def test_load_from_local_filesystem_utf8(tmp_path):
+    """Confirm local manifests with UTF-8 characters load on Windows."""
+    path = tmp_path / "manifest.json"
+    expected = {"description": "café"}
+    path.write_text(json.dumps(expected), encoding="utf-8")
+    file_config = FileReferenceConfig(path=str(path))  # type: ignore
+
+    assert ManifestLoader.load_from_local_filesystem(file_config) == expected
 
 
 def test_load_from_local_filesystem_local_path(example_file):

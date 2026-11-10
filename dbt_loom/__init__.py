@@ -73,6 +73,12 @@ def identify_node_subgraph(manifest) -> Dict[str, ManifestNode]:
         if not node:
             continue
 
+        if (
+            node.get("resource_type") == NodeType.Model.value
+            and node.get("config", {}).get("materialized") == "ephemeral"
+        ):
+            continue
+
         if node.get("access") is None:
             node["access"] = node.get("config", {}).get("access", "protected")
 
